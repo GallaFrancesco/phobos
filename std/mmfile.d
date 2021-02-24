@@ -134,19 +134,26 @@ class MmFile
             char c = 0;
             core.sys.posix.unistd.write(fd, &c, 1);
         }
-        else if (prot & PROT_READ && size == 0)
-            size = statbuf.st_size;
+        else if (prot & PROT_READ && size == 0) {
+            if (statbuf.st_size > 0) size = statbuf.st_size;
+            else return;
+        }
+
         this.size = size;
 
         // Map the file into memory!
         size_t initial_map = (window && 2*window<size)
             ? 2*window : cast(size_t) size;
-        auto p = mmap(address, initial_map, prot, flags, fd, 0);
-        if (p == MAP_FAILED)
-        {
-            errnoEnforce(false, "Could not map file into memory");
+        if(initial_map > 0) {
+            auto p = mmap(address, initial_map, prot, flags, fd, 0);
+            if (p == MAP_FAILED)
+            {
+                errnoEnforce(false, "Could not map file into memory");
+            }
+            data = p[0 .. initial_map];
+        } else {
+            return;
         }
-        data = p[0 .. initial_map];
     }
 
     /**
@@ -331,8 +338,10 @@ class MmFile
                     char c = 0;
                     core.sys.posix.unistd.write(fd, &c, 1);
                 }
-                else if (prot & PROT_READ && size == 0)
-                    size = statbuf.st_size;
+                else if (prot & PROT_READ && size == 0) {
+                    if (statbuf.st_size > 0) size = statbuf.st_size;
+                    else return;
+                }
             }
             else
             {
@@ -342,18 +351,22 @@ class MmFile
             this.size = size;
             size_t initial_map = (window && 2*window<size)
                 ? 2*window : cast(size_t) size;
-            p = mmap(address, initial_map, prot, flags, fd, 0);
-            if (p == MAP_FAILED)
-            {
-                if (fd != -1)
-                {
-                    .close(fd);
-                    fd = -1;
-                }
-                errnoEnforce(false, "Could not map file "~filename);
-            }
+            if(initial_map > 0) {
+                p = mmap(address, initial_map, prot, flags, fd, 0);
+                if (p == MAP_FAILED)
+                    {
+                        if (fd != -1)
+                            {
+                                .close(fd);
+                                fd = -1;
+                            }
+                        errnoEnforce(false, "Could not map file "~filename);
+                    }
 
-            data = p[0 .. initial_map];
+                data = p[0 .. initial_map];
+            } else {
+                return;
+            }
         }
         else
         {
@@ -724,4 +737,21 @@ version (linux)
 {
     MmFile shar = new MmFile(null, MmFile.Mode.readWrite, 10, null, 0);
     void[] output = shar[0 .. $];
+}
+
+@system unittest // https://issues.dlang.org/show_bug.cgi?id=21657
+{
+    import std.file : deleteme, remove;
+    import std.typecons : scoped;
+
+    // map an empty file
+    auto fn = std.file.deleteme ~ "-testing.txt";
+    scope(exit) std.file.remove(fn);
+    auto f = File(fn,"w"); // create the file
+
+    scope mf = new MmFile(fn);
+    assert(mf.length == 0);
+
+    scope mf2 = new MmFile(f);
+    assert(mf2.length == 0);
 }
